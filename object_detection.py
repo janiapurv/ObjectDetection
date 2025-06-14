@@ -3,11 +3,19 @@ import numpy as np
 from ultralytics import YOLO
 import time
 import os
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ObjectDetector:
     def __init__(self, video_path):
         # Initialize YOLO model
+        logger.info("Initializing YOLO model...")
+        logger.info("This will download yolov8n.pt if it's not already present")
         self.model = YOLO('yolov8n.pt')
+        logger.info("YOLO model loaded successfully")
         
         # Ensure video path is absolute
         if not os.path.isabs(video_path):
@@ -30,8 +38,8 @@ class ObjectDetector:
         # Set playback speed (lower = slower)
         self.playback_speed = 0.5  # 0.5x speed (half speed)
         
-        print(f"Video properties: {self.width}x{self.height} @ {self.fps}fps")
-        print(f"Playback speed: {self.playback_speed}x")
+        logger.info(f"Video properties: {self.width}x{self.height} @ {self.fps}fps")
+        logger.info(f"Playback speed: {self.playback_speed}x")
         
         # Colors for visualization
         self.colors = np.random.randint(0, 255, size=(80, 3), dtype=np.uint8)
@@ -71,7 +79,7 @@ class ObjectDetector:
                 # Read frame from video
                 ret, frame = self.cap.read()
                 if not ret:
-                    print("End of video file")
+                    logger.info("End of video file")
                     break
                 
                 # Process frame
@@ -111,4 +119,4 @@ if __name__ == '__main__':
         detector = ObjectDetector(video_file)
         detector.run()
     except Exception as e:
-        print(f"An error occurred: {str(e)}") 
+        logger.error(f"An error occurred: {str(e)}") 
