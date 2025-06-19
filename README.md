@@ -1,6 +1,32 @@
-# YOLO Object Detection
+# Object Detection Project
 
-This project implements real-time object detection using YOLO (You Only Look Once) and OpenCV. It can process video files and detect various objects in them.
+This repository contains two implementations of object detection on video using YOLOv8:
+
+- **Python**: See `object_detection.py` (uses Ultralytics YOLOv8 Python API)
+- **C++**: See the `ObjectDetectionCpp/` directory (uses OpenCV DNN with YOLOv8 ONNX export)
+
+## C++ Implementation (ObjectDetectionCpp)
+
+### Requirements
+- OpenCV (with DNN module)
+- CMake
+- C++17 compiler
+- `yolov8n.onnx` model file (exported from Python, place in `ObjectDetectionCpp/data/`)
+- `cars.mp4` video file (place in `ObjectDetectionCpp/data/`)
+
+### Build
+```sh
+cd ObjectDetectionCpp
+mkdir build
+cd build
+cmake ..
+cmake --build .
+```
+
+### Run
+```sh
+./ObjectDetectionCpp
+```
 
 ## Features
 
