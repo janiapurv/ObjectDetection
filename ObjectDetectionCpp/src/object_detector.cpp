@@ -35,65 +35,159 @@ void ObjectDetector::processFrame(cv::Mat& frame) {
     std::vector<cv::Mat> outputs;
     net.forward(outputs, net.getUnconnectedOutLayersNames());
 
-    float confThreshold = 0.5f;
+    float confThreshold = 0.25f;  // Lower threshold for better detection
     float iouThreshold = 0.45f;
 
     std::vector<int> classIds;
     std::vector<float> confidences;
     std::vector<cv::Rect> boxes;
 
-    // Print output shape for debugging
-    if (!outputs.empty()) {
+    // Print output shape for debugging (only once)
+    static bool firstFrame = true;
+    if (firstFrame && !outputs.empty()) {
         std::cout << "Output shape: [";
         for (int i = 0; i < outputs[0].dims; ++i) {
             std::cout << outputs[0].size[i];
             if (i < outputs[0].dims - 1) std::cout << ", ";
         }
         std::cout << "]" << std::endl;
+        firstFrame = false;
     }
 
-    // Typical YOLOv8 ONNX output: [1, N, 84]
-    if (!outputs.empty() && outputs[0].dims == 3) {
-        const int numDetections = outputs[0].size[1];
-        const int numElements = outputs[0].size[2];
-        float* data = (float*)outputs[0].data;
-        for (int i = 0; i < numDetections; ++i) {
-            float objConf = data[4];
-            if (objConf < confThreshold) {
+    // YOLOv8 ONNX output parsing
+    if (!outputs.empty()) {
+        cv::Mat output = outputs[0];
+        
+        // Handle different output formats
+        if (output.dims == 3) {
+            // Format: [1, N, 84] - typical YOLOv8 ONNX output
+            const int numDetections = output.size[1];
+            const int numElements = output.size[2];
+            float* data = (float*)output.data;
+            
+            std::cout << "Processing " << numDetections << " detections with " << numElements << " elements each" << std::endl;
+            
+            for (int i = 0; i < numDetections; ++i) {
+                // Get class scores (skip first 4 elements which are bbox coords)
+                float* classScores = data + 4;
+                cv::Mat scores(1, classNames.size(), CV_32FC1, classScores);
+                cv::Point classIdPoint;
+                double maxClassScore;
+                minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
+                
+                float confidence = (float)maxClassScore;
+                if (confidence > confThreshold) {
+                    // Get bounding box coordinates (normalized to 0-1)
+                    float x_center = data[0];
+                    float y_center = data[1];
+                    float width = data[2];
+                    float height = data[3];
+                    
+                    // Convert to image coordinates
+                    int left = int((x_center - width/2) * frame.cols);
+                    int top = int((y_center - height/2) * frame.rows);
+                    int w = int(width * frame.cols);
+                    int h = int(height * frame.rows);
+                    
+                    // Ensure coordinates are within image bounds
+                    left = std::max(0, left);
+                    top = std::max(0, top);
+                    w = std::min(w, frame.cols - left);
+                    h = std::min(h, frame.rows - top);
+                    
+                    classIds.push_back(classIdPoint.x);
+                    confidences.push_back(confidence);
+                    boxes.emplace_back(left, top, w, h);
+                    
+                    // Debug output for first few detections
+                    if (classIds.size() <= 3) {
+                        std::cout << "Detection " << classIds.size() << ": " 
+                                  << classNames[classIdPoint.x] << " conf=" << confidence 
+                                  << " box=[" << left << "," << top << "," << w << "," << h << "]" << std::endl;
+                    }
+                }
                 data += numElements;
-                continue;
             }
-            float* classScores = data + 5;
-            cv::Mat scores(1, classNames.size(), CV_32FC1, classScores);
-            cv::Point classIdPoint;
-            double maxClassScore;
-            minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
-            float confidence = objConf * (float)maxClassScore;
-            if (confidence > confThreshold) {
-                float cx = data[0] * frame.cols;
-                float cy = data[1] * frame.rows;
-                float w = data[2] * frame.cols;
-                float h = data[3] * frame.rows;
-                int left = int(cx - w / 2);
-                int top = int(cy - h / 2);
-                classIds.push_back(classIdPoint.x);
-                confidences.push_back(confidence);
-                boxes.emplace_back(left, top, int(w), int(h));
+        } else if (output.dims == 2) {
+            // Format: [N, 84] - alternative YOLOv8 ONNX output
+            const int numDetections = output.size[0];
+            const int numElements = output.size[1];
+            float* data = (float*)output.data;
+            
+            std::cout << "Processing " << numDetections << " detections with " << numElements << " elements each" << std::endl;
+            
+            for (int i = 0; i < numDetections; ++i) {
+                float* classScores = data + 4;
+                cv::Mat scores(1, classNames.size(), CV_32FC1, classScores);
+                cv::Point classIdPoint;
+                double maxClassScore;
+                minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
+                
+                float confidence = (float)maxClassScore;
+                if (confidence > confThreshold) {
+                    float x_center = data[0];
+                    float y_center = data[1];
+                    float width = data[2];
+                    float height = data[3];
+                    
+                    int left = int((x_center - width/2) * frame.cols);
+                    int top = int((y_center - height/2) * frame.rows);
+                    int w = int(width * frame.cols);
+                    int h = int(height * frame.rows);
+                    
+                    left = std::max(0, left);
+                    top = std::max(0, top);
+                    w = std::min(w, frame.cols - left);
+                    h = std::min(h, frame.rows - top);
+                    
+                    classIds.push_back(classIdPoint.x);
+                    confidences.push_back(confidence);
+                    boxes.emplace_back(left, top, w, h);
+                    
+                    // Debug output for first few detections
+                    if (classIds.size() <= 3) {
+                        std::cout << "Detection " << classIds.size() << ": " 
+                                  << classNames[classIdPoint.x] << " conf=" << confidence 
+                                  << " box=[" << left << "," << top << "," << w << "," << h << "]" << std::endl;
+                    }
+                }
+                data += numElements;
             }
-            data += numElements;
+        } else {
+            std::cout << "Unexpected output dimensions: " << output.dims << std::endl;
         }
+    }
+
+    // Print detection count for debugging
+    if (!boxes.empty()) {
+        std::cout << "Total detections before NMS: " << boxes.size() << std::endl;
+    } else {
+        std::cout << "No detections found" << std::endl;
     }
 
     // NMS
     std::vector<int> indices;
     cv::dnn::NMSBoxes(boxes, confidences, confThreshold, iouThreshold, indices);
+    
+    std::cout << "Detections after NMS: " << indices.size() << std::endl;
+    
+    // Draw detections
     for (int idx : indices) {
         cv::Rect box = boxes[idx];
         int classId = classIds[idx];
         float conf = confidences[idx];
-        cv::Scalar color = cv::Scalar(0, 255, 0); // You can randomize per class if you want
+        
+        // Use different colors for different classes
+        cv::Scalar color;
+        if (classId == 2) { // car class
+            color = cv::Scalar(0, 255, 0); // green for cars
+        } else {
+            color = cv::Scalar(255, 0, 0); // blue for others
+        }
+        
         cv::rectangle(frame, box, color, 2);
         std::string label = classNames[classId] + " " + cv::format("%.2f", conf);
+        
         int baseLine;
         cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
         int top = std::max(box.y, labelSize.height);
