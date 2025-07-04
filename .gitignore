@@ -39,4 +39,8 @@ ENV/
 # data/
 
 # Logs
-*.log 
+*.log
+
+# Ignore ONNX model files
+ObjectDetectionCpp/data/yolov8n.onnx
+*.onnx 
