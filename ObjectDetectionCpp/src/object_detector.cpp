@@ -35,7 +35,7 @@ void ObjectDetector::processFrame(cv::Mat& frame) {
     std::vector<cv::Mat> outputs;
     net.forward(outputs, net.getUnconnectedOutLayersNames());
 
-    float confThreshold = 0.25f;  // Lower threshold for better detection
+    float confThreshold = 0.3f;
     float iouThreshold = 0.45f;
 
     std::vector<int> classIds;
@@ -54,140 +54,71 @@ void ObjectDetector::processFrame(cv::Mat& frame) {
         firstFrame = false;
     }
 
-    // YOLOv8 ONNX output parsing
     if (!outputs.empty()) {
         cv::Mat output = outputs[0];
-        
-        // Handle different output formats
-        if (output.dims == 3) {
-            // Format: [1, N, 84] - typical YOLOv8 ONNX output
-            const int numDetections = output.size[1];
-            const int numElements = output.size[2];
-            float* data = (float*)output.data;
-            
-            std::cout << "Processing " << numDetections << " detections with " << numElements << " elements each" << std::endl;
-            
-            for (int i = 0; i < numDetections; ++i) {
-                // Get class scores (skip first 4 elements which are bbox coords)
-                float* classScores = data + 4;
-                cv::Mat scores(1, classNames.size(), CV_32FC1, classScores);
-                cv::Point classIdPoint;
-                double maxClassScore;
-                minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
-                
-                float confidence = (float)maxClassScore;
-                if (confidence > confThreshold) {
-                    // Get bounding box coordinates (normalized to 0-1)
-                    float x_center = data[0];
-                    float y_center = data[1];
-                    float width = data[2];
-                    float height = data[3];
-                    
-                    // Convert to image coordinates
-                    int left = int((x_center - width/2) * frame.cols);
-                    int top = int((y_center - height/2) * frame.rows);
-                    int w = int(width * frame.cols);
-                    int h = int(height * frame.rows);
-                    
-                    // Ensure coordinates are within image bounds
-                    left = std::max(0, left);
-                    top = std::max(0, top);
-                    w = std::min(w, frame.cols - left);
-                    h = std::min(h, frame.rows - top);
-                    
-                    classIds.push_back(classIdPoint.x);
-                    confidences.push_back(confidence);
-                    boxes.emplace_back(left, top, w, h);
-                    
-                    // Debug output for first few detections
-                    if (classIds.size() <= 3) {
-                        std::cout << "Detection " << classIds.size() << ": " 
-                                  << classNames[classIdPoint.x] << " conf=" << confidence 
-                                  << " box=[" << left << "," << top << "," << w << "," << h << "]" << std::endl;
+        if (output.dims == 3 && output.size[1] == 84) {
+            cv::Mat reshaped = output.reshape(1, output.size[2]); // [8400, 84]
+            for (int i = 0; i < reshaped.rows; ++i) {
+                float* row = reshaped.ptr<float>(i);
+                float x_center = row[0];
+                float y_center = row[1];
+                float width = row[2];
+                float height = row[3];
+
+                // Find max class probability (apply sigmoid to all class logits)
+                float maxProb = 0.0f;
+                int classId = -1;
+                for (int c = 4; c < 84; ++c) {
+                    float prob = 1.0f / (1.0f + exp(-row[c])); // sigmoid
+                    if (prob > maxProb) {
+                        maxProb = prob;
+                        classId = c - 4;
                     }
                 }
-                data += numElements;
-            }
-        } else if (output.dims == 2) {
-            // Format: [N, 84] - alternative YOLOv8 ONNX output
-            const int numDetections = output.size[0];
-            const int numElements = output.size[1];
-            float* data = (float*)output.data;
-            
-            std::cout << "Processing " << numDetections << " detections with " << numElements << " elements each" << std::endl;
-            
-            for (int i = 0; i < numDetections; ++i) {
-                float* classScores = data + 4;
-                cv::Mat scores(1, classNames.size(), CV_32FC1, classScores);
-                cv::Point classIdPoint;
-                double maxClassScore;
-                minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
-                
-                float confidence = (float)maxClassScore;
-                if (confidence > confThreshold) {
-                    float x_center = data[0];
-                    float y_center = data[1];
-                    float width = data[2];
-                    float height = data[3];
-                    
-                    int left = int((x_center - width/2) * frame.cols);
-                    int top = int((y_center - height/2) * frame.rows);
-                    int w = int(width * frame.cols);
-                    int h = int(height * frame.rows);
-                    
-                    left = std::max(0, left);
-                    top = std::max(0, top);
-                    w = std::min(w, frame.cols - left);
-                    h = std::min(h, frame.rows - top);
-                    
-                    classIds.push_back(classIdPoint.x);
-                    confidences.push_back(confidence);
-                    boxes.emplace_back(left, top, w, h);
-                    
-                    // Debug output for first few detections
-                    if (classIds.size() <= 3) {
-                        std::cout << "Detection " << classIds.size() << ": " 
-                                  << classNames[classIdPoint.x] << " conf=" << confidence 
-                                  << " box=[" << left << "," << top << "," << w << "," << h << "]" << std::endl;
+                if (maxProb > confThreshold) {
+                    // Convert to image coordinates (input is 640x640, scale to frame size)
+                    float scaleX = float(frame.cols) / inputWidth;
+                    float scaleY = float(frame.rows) / inputHeight;
+                    int left = int((x_center - width/2) * scaleX);
+                    int top = int((y_center - height/2) * scaleY);
+                    int w = int(width * scaleX);
+                    int h = int(height * scaleY);
+                    left = std::max(0, std::min(left, frame.cols - 1));
+                    top = std::max(0, std::min(top, frame.rows - 1));
+                    w = std::max(1, std::min(w, frame.cols - left));
+                    h = std::max(1, std::min(h, frame.rows - top));
+                    if (w > 10 && h > 10) {
+                        classIds.push_back(classId);
+                        confidences.push_back(maxProb);
+                        boxes.emplace_back(left, top, w, h);
+                        if (classIds.size() <= 5) {
+                            std::cout << "Detection " << classIds.size() << ": "
+                                      << classNames[classId] << " conf=" << maxProb
+                                      << " box=[" << left << "," << top << "," << w << "," << h << "]" << std::endl;
+                        }
                     }
                 }
-                data += numElements;
             }
-        } else {
-            std::cout << "Unexpected output dimensions: " << output.dims << std::endl;
         }
     }
 
-    // Print detection count for debugging
-    if (!boxes.empty()) {
-        std::cout << "Total detections before NMS: " << boxes.size() << std::endl;
-    } else {
-        std::cout << "No detections found" << std::endl;
-    }
-
-    // NMS
+    std::cout << "Total detections before NMS: " << boxes.size() << std::endl;
     std::vector<int> indices;
     cv::dnn::NMSBoxes(boxes, confidences, confThreshold, iouThreshold, indices);
-    
     std::cout << "Detections after NMS: " << indices.size() << std::endl;
-    
-    // Draw detections
     for (int idx : indices) {
         cv::Rect box = boxes[idx];
         int classId = classIds[idx];
         float conf = confidences[idx];
-        
-        // Use different colors for different classes
         cv::Scalar color;
-        if (classId == 2) { // car class
-            color = cv::Scalar(0, 255, 0); // green for cars
-        } else {
-            color = cv::Scalar(255, 0, 0); // blue for others
+        switch (classId) {
+            case 0: color = cv::Scalar(255, 0, 0); break;   // person - blue
+            case 2: color = cv::Scalar(0, 255, 0); break;   // car - green
+            case 7: color = cv::Scalar(0, 0, 255); break;   // truck - red
+            default: color = cv::Scalar(255, 255, 0); break; // others - cyan
         }
-        
         cv::rectangle(frame, box, color, 2);
         std::string label = classNames[classId] + " " + cv::format("%.2f", conf);
-        
         int baseLine;
         cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
         int top = std::max(box.y, labelSize.height);
